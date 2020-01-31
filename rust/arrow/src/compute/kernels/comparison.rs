@@ -139,6 +139,87 @@ where
     compare_op(left, right, |a, b| a == b)
 }
 
+/// Invoke a compute kernel on a pair of arrays
+macro_rules! compute_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast array");
+
+        Ok($OP(&ll, &rr)?)
+    }};
+}
+
+
+/// Perform `left == right` operation on two arrays.
+pub fn eq2(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<BooleanArray>
+{
+    match left.data_type() {
+        DataType::Int8 => compute_op!(left, right, eq, Int8Array),
+        DataType::Int16 => compute_op!(left, right, eq, Int16Array),
+        DataType::Int32 => compute_op!(left, right, eq, Int32Array),
+        DataType::Int64 => compute_op!(left, right, eq, Int64Array),
+        DataType::UInt8 => compute_op!(left, right, eq, UInt8Array),
+        DataType::UInt16 => compute_op!(left, right, eq, UInt16Array),
+        DataType::UInt32 => compute_op!(left, right, eq, UInt32Array),
+        DataType::UInt64 => compute_op!(left, right, eq, UInt64Array),
+        DataType::Float32 => compute_op!(left, right, eq, Float32Array),
+        DataType::Float64 => compute_op!(left, right, eq, Float64Array),
+        DataType::Utf8 => compute_op!(left, right, eq_string, StringArray),
+        DataType::Binary => compute_op!(left, right, eq_string, StringArray),
+        other => Err(ArrowError::ComputeError(format!(
+            "Unsupported data type {:?} for eq",
+            other
+        ))),
+    }
+}
+
+/// Perform `left == right` operation on two arrays.
+pub fn eq_string(left: &StringArray, right: &StringArray) -> Result<BooleanArray>
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform math operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let null_bit_buffer = apply_bin_op_to_option_bitmap(
+        left.data().null_bitmap(),
+        right.data().null_bitmap(),
+        |a, b| a & b,
+    )?;
+
+    let op = |a, b| a == b;
+
+    let num_byte = bit_util::ceil(left.len(), 8);
+    let mut val_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, false);
+    let val_slice = val_buf.data_mut();
+
+    for i in 0..left.len() {
+        let val = op(left.value(i), right.value(i));
+        if val {
+            bit_util::set_bit(val_slice, i);
+        }
+    }
+
+    let data = ArrayData::new(
+        DataType::Boolean,
+        left.len(),
+        None,
+        null_bit_buffer,
+        left.offset(),
+        vec![Buffer::from(val_buf.freeze())],
+        vec![],
+    );
+
+    Ok(BooleanArray::from(Arc::new(data)))
+}
+
 /// Perform `left != right` operation on two arrays.
 pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where

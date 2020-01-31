@@ -32,12 +32,13 @@ use arrow::array::{
 use arrow::array::{
     Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
     Int8Builder, UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
+    StringBuilder,
 };
 use arrow::compute;
 use arrow::compute::kernels::arithmetic::{add, divide, multiply, subtract};
 use arrow::compute::kernels::boolean::{and, or};
 use arrow::compute::kernels::cast::cast;
-use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq};
+use arrow::compute::kernels::comparison::{eq, eq2, gt, gt_eq, lt, lt_eq, neq};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
@@ -879,7 +880,7 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
             other => Err(ExecutionError::General(format!(
-                "Unsupported data type {:?}",
+                "Unsupported data type {:?} for binary op",
                 other
             ))),
         }
@@ -938,12 +939,13 @@ impl PhysicalExpr for BinaryExpr {
                 right.data_type()
             )));
         }
+
         match &self.op {
             Operator::Lt => binary_array_op!(left, right, lt),
             Operator::LtEq => binary_array_op!(left, right, lt_eq),
             Operator::Gt => binary_array_op!(left, right, gt),
             Operator::GtEq => binary_array_op!(left, right, gt_eq),
-            Operator::Eq => binary_array_op!(left, right, eq),
+            Operator::Eq => Ok(Arc::new(eq2(left, right)?)),
             Operator::NotEq => binary_array_op!(left, right, neq),
             Operator::Plus => binary_array_op!(left, right, add),
             Operator::Minus => binary_array_op!(left, right, subtract),
@@ -1106,6 +1108,9 @@ impl PhysicalExpr for Literal {
             }
             ScalarValue::Float64(value) => {
                 build_literal_array!(batch, Float64Builder, *value)
+            }
+            ScalarValue::Utf8(value) => {
+                build_literal_array!(batch, StringBuilder, &*value)
             }
             other => Err(ExecutionError::General(format!(
                 "Unsupported literal type {:?}",
