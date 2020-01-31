@@ -25,10 +25,12 @@
 use std::sync::Arc;
 
 use crate::array::*;
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, MutableBuffer};
 use crate::compute::util::apply_bin_op_to_option_bitmap;
-use crate::datatypes::{ArrowNumericType, BooleanType, DataType, ToByteSlice};
+use crate::datatypes::{ArrowNumericType, BooleanType, DataType};
 use crate::error::{ArrowError, Result};
+use crate::util::bit_util;
+
 
 /// Helper function to perform boolean lambda function on values from two arrays, this
 /// version does not attempt to use SIMD.
@@ -53,9 +55,15 @@ where
         |a, b| a & b,
     )?;
 
-    let mut values = Vec::with_capacity(left.len());
+    let num_byte = bit_util::ceil(left.len(), 8);
+    let mut val_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, false);
+    let val_slice = val_buf.data_mut();
+
     for i in 0..left.len() {
-        values.push(op(left.value(i), right.value(i)));
+        let val = op(left.value(i), right.value(i));
+        if val {
+            bit_util::set_bit(val_slice, i);
+        }
     }
 
     let data = ArrayData::new(
@@ -64,9 +72,10 @@ where
         None,
         null_bit_buffer,
         left.offset(),
-        vec![Buffer::from(values.to_byte_slice())],
+        vec![Buffer::from(val_buf.freeze())],
         vec![],
     );
+
     Ok(PrimitiveArray::<BooleanType>::from(Arc::new(data)))
 }
 
